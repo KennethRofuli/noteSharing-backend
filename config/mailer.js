@@ -8,9 +8,6 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS // use Gmail App Password
-  },
-  tls: {
-    rejectUnauthorized: false // ✅ ignore self-signed certificate errors
   }
 });
 
