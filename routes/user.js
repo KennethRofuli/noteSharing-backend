@@ -10,6 +10,7 @@ router.get('/search', authMiddleware, async (req, res) => {
     const query = req.query.q || '';
     const users = await User.find({
       email: { $regex: query, $options: 'i' },
+      isVerified: true, // only verified users
       _id: { $ne: req.user.id } // exclude logged-in user
     })
       .select('email name _id') // return email + name
