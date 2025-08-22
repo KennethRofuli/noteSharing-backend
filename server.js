@@ -14,7 +14,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-const connectedUsers = new Map();
+// in-memory multi-socket map: userId -> Set<socketId>
+const connectedUsers = new Map(); // userId -> Set(socketId)
 
 // Middleware
 app.use(cors());
@@ -30,42 +31,48 @@ app.use('/api/chat', chatRouter);
 
 // Socket.io
 io.on('connection', (socket) => {
-  socket.on('register', userId => {
-    connectedUsers.set(userId, socket.id);
-    console.log('[SOCKET][REGISTER] Registered', userId, 'with socket', socket.id);
-  });
+  console.log('[SOCKET] connected', socket.id);
 
-  socket.on('chat-message', async (msg) => {
-    // --- Add these debug logs ---
-    console.log('[SOCKET][CHAT] Received chat-message:', msg);
-    const recipientSocketId = connectedUsers.get(msg.to);
-    console.log('[SOCKET][CHAT] recipientSocketId:', recipientSocketId);
-    // --- End debug logs ---
-
-    // Save to DB
-    try {
-      await Message.create({
-        from: msg.from,
-        to: msg.to,
-        text: msg.text,
-        timestamp: msg.timestamp || new Date()
-      });
-    } catch (err) {
-      console.error('Failed to save message:', err);
-    }
-    // Send to recipient
-    if (recipientSocketId) {
-      io.to(recipientSocketId).emit('chat-message', msg);
-    }
+  socket.on('register', (userId) => {
+    const uid = String(userId);
+    const set = connectedUsers.get(uid) || new Set();
+    set.add(socket.id);
+    connectedUsers.set(uid, set);
+    console.log('[SOCKET] register', uid, '->', socket.id, 'mapSize=', connectedUsers.size);
   });
 
   socket.on('disconnect', () => {
-    // Remove user from map on disconnect
-    for (const [userId, sockId] of connectedUsers.entries()) {
-      if (sockId === socket.id) {
-        connectedUsers.delete(userId);
-        break;
+    for (const [uid, set] of connectedUsers.entries()) {
+      if (set.has(socket.id)) {
+        set.delete(socket.id);
+        if (set.size === 0) connectedUsers.delete(uid);
+        else connectedUsers.set(uid, set);
+        console.log('[SOCKET] removed mapping', uid);
       }
+    }
+    console.log('[SOCKET] disconnect', socket.id, 'mapSize=', connectedUsers.size);
+  });
+
+  socket.on('chat-message', async (msg) => {
+    const toId = String(msg.to);
+    const sockets = connectedUsers.get(toId);
+    console.log('[SOCKET][CHAT] Received chat-message:', msg);
+    console.log('[SOCKET][CHAT] recipientSockets:', sockets);
+
+    // persist message regardless of recipient online state
+    try {
+      const message = new Message({ from: msg.from, to: msg.to, text: msg.text, timestamp: msg.timestamp || Date.now() });
+      await message.save();
+    } catch (err) {
+      console.error('[SOCKET][CHAT] failed saving message', err);
+    }
+
+    if (sockets && sockets.size) {
+      for (const sid of sockets) {
+        io.to(sid).emit('chat-message', msg);
+      }
+    } else {
+      console.log('[SOCKET][CHAT] recipient not connected - message saved for later');
     }
   });
 });

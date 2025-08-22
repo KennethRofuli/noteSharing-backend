@@ -1,11 +1,12 @@
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
+const fsp = fs.promises;
 const Note = require('../models/Note');
 const User = require('../models/User');
 
 exports.uploadNote = async (req, res) => {
   const { title, description, courseCode, instructor } = req.body;
-  const uploadedBy = req.user._id; // <-- use logged-in user
+  const uploadedBy = req.user._id;
 
   if (!req.file) return res.status(400).json({ message: "File is required" });
 
@@ -19,13 +20,12 @@ exports.uploadNote = async (req, res) => {
   }
 };
 
-
 exports.getNotes = async (req, res) => {
   try {
     const notes = await Note.find({
       $or: [
         { uploadedBy: req.user.id },
-        { 'sharedWith.recipient': req.user.id } // <-- updated for subdocs
+        { 'sharedWith.recipient': req.user.id }
       ]
     }).populate("uploadedBy", "email name");
     res.json(notes);
@@ -38,50 +38,38 @@ exports.getNotes = async (req, res) => {
 // POST /notes/share/:id
 exports.shareNote = async (req, res) => {
   try {
-    const { id } = req.params; // note id
+    const { id } = req.params;
     const { userEmail } = req.body;
 
-    // Find user by email
     const user = await User.findOne({ email: userEmail });
     if (!user) return res.status(404).json({ message: "User not found" });
-    // Find note by id
+
     const note = await Note.findById(id);
     if (!note) return res.status(404).json({ message: "Note not found" });
 
-    // ✅ only owner can share
     if (note.uploadedBy.toString() !== req.user.id) {
       return res.status(403).json({ message: "Not allowed to share this note" });
     }
 
-    // ✅ avoid duplicates
     const alreadyShared = (note.sharedWith || []).some(sw =>
-      (sw.recipient && sw.recipient.toString() === user._id.toString()) ||
-      (sw._id && sw._id.toString() === user._id.toString()) // fallback for legacy
+      (sw.recipient && sw.recipient.toString() === user._id.toString())
     );
+
     if (!alreadyShared) {
       note.sharedWith.push({ recipient: user._id });
       await note.save();
+
+      // emit socket
+      try {
+        const io = req.app.get('io');
+        const connectedUsers = req.app.get('connectedUsers');
+        emitToUserSockets(io, connectedUsers, user._id, 'note-shared', { noteId: note._id, from: req.user._id });
+      } catch (err) {
+        console.error('[NOTE_CONTROLLER] share emit error', err);
+      }
     }
 
-    const io = req.app.get('io');
-    const connectedUsers = req.app.get('connectedUsers');
-
-    const recipientId = user._id.toString();
-    const recipientSocketId = connectedUsers.get(recipientId);
-
-    // Debug logs
-    //console.log('[SOCKET][SHARE] recipientId:', recipientId);
-    //console.log('[SOCKET][SHARE] connectedUsers:', connectedUsers);
-    //console.log('[SOCKET][SHARE] recipientSocketId:', recipientSocketId);
-
-    if (io && recipientSocketId) {
-      io.to(recipientSocketId).emit('note-shared', { noteId: note._id });
-      console.log('[SOCKET][SHARE] Emitted note-shared to socket:', recipientSocketId);
-    } else {
-      console.log('[SOCKET][SHARE] No socket emission (io or recipientSocketId missing)');
-    }
-
-    res.json({ message: "Note shared successfully" });
+    return res.json({ message: "Note shared successfully" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: "Error sharing note" });
@@ -94,104 +82,76 @@ exports.deleteNote = async (req, res) => {
     const note = await Note.findById(req.params.id);
     if (!note) return res.status(404).json({ message: 'Note not found' });
 
-    const ownerId = note.uploadedBy?.toString ? note.uploadedBy.toString() : String(note.uploadedBy);
+    const ownerId = note.uploadedBy?.toString();
     if (ownerId !== req.user.id) return res.status(403).json({ message: 'Not allowed to delete this note' });
 
+    // resolve filename
     let filename = null;
     if (note.fileUrl) {
       try {
         const parsed = new URL(note.fileUrl);
         filename = path.basename(parsed.pathname);
-      } catch (e) {
+      } catch {
         filename = path.basename(note.fileUrl);
       }
     }
 
     const uploadsDir = path.join(__dirname, '..', 'uploads');
-
-    // try several candidate filenames (raw, decoded) and fallback to scanning uploads dir
     let fileToDelete = null;
+
     if (filename) {
       const candidates = [filename];
 
-      // add decoded candidate if it looks URL-encoded
       try {
         const decoded = decodeURIComponent(filename);
         if (decoded !== filename) candidates.push(decoded);
-      } catch (e) {
-        // ignore malformed decode
-      }
+      } catch {}
 
-      // check each candidate exists
       for (const cand of candidates) {
         const p = path.join(uploadsDir, cand);
         try {
-          await fs.promises.access(p, fs.constants.F_OK);
+          await fsp.access(p, fs.constants.F_OK);
           fileToDelete = p;
           break;
-        } catch (e) {
-          // not found, continue
-        }
+        } catch {}
       }
 
-      // fallback: try to find file in uploads that starts with same timestamp/prefix
       if (!fileToDelete) {
         const prefix = filename.split('-')[0];
         try {
-          const files = await fs.promises.readdir(uploadsDir);
+          const files = await fsp.readdir(uploadsDir);
           const match = files.find(f => f.startsWith(prefix));
           if (match) fileToDelete = path.join(uploadsDir, match);
         } catch (e) {
           console.error('Failed to read uploads dir', uploadsDir, e);
         }
       }
-    } else {
-      console.warn('No filename resolved for note', note._id, 'fileUrl:', note.fileUrl);
     }
 
     if (fileToDelete) {
       try {
-        await fs.promises.unlink(fileToDelete);
+        await fsp.unlink(fileToDelete);
         console.log('Deleted file:', fileToDelete);
       } catch (err) {
         console.error('Error deleting file:', fileToDelete, err);
-        // non-fatal: continue to delete DB doc but log error
       }
     } else {
-      console.warn('File not found for deletion (candidates tried):', filename, 'uploadsDir:', uploadsDir);
+      console.warn('File not found for deletion:', filename);
     }
 
-    // Save sharedWith user IDs before deleting
-    const sharedUserIds = (note.sharedWith || [])
-      .map(sw => sw.recipient ? sw.recipient.toString() : (sw._id ? sw._id.toString() : sw.toString()))
-      .filter(Boolean);
-
+    const sharedUserIds = (note.sharedWith || []).map(sw => sw.recipient?.toString()).filter(Boolean);
     await note.deleteOne();
 
-    // Emit socket event to all shared users
     const io = req.app.get('io');
     const connectedUsers = req.app.get('connectedUsers');
 
-    // Debug logs
     console.log('[SOCKET][DELETE] sharedUserIds:', sharedUserIds);
-    console.log('[SOCKET][DELETE] connectedUsers:', connectedUsers);
 
     if (io && connectedUsers && sharedUserIds.length) {
-      sharedUserIds.forEach(userId => {
-        const socketId = connectedUsers.get(userId);
-        console.log('[SOCKET][DELETE] userId:', userId, 'socketId:', socketId);
-        if (socketId) {
-          io.to(socketId).emit('note-deleted', { noteId: note._id });
-          console.log('[SOCKET][DELETE] Emitted note-deleted to socket:', socketId);
-        } else {
-          console.log('[SOCKET][DELETE] No socket emission for userId:', userId);
-        }
+      sharedUserIds.forEach(uid => {
+        emitToUserSockets(io, connectedUsers, uid, 'note-deleted', { noteId: note._id });
       });
-    } else {
-      console.log('[SOCKET][DELETE] No socket emission (io, connectedUsers, or sharedUserIds missing)');
     }
-
-    console.log('Emitting note-deleted to:', sharedUserIds);
 
     return res.json({ message: 'Note deleted successfully' });
   } catch (err) {
@@ -200,6 +160,20 @@ exports.deleteNote = async (req, res) => {
   }
 };
 
+// helper
+function emitToUserSockets(io, connectedUsers, userId, event, payload) {
+  try {
+    const sockets = connectedUsers.get(String(userId));
+    if (!sockets) return;
 
-
-
+    if (sockets instanceof Set) {
+      for (const sid of sockets) {
+        io.to(sid).emit(event, payload);
+      }
+    } else if (typeof sockets === 'string') {
+      io.to(sockets).emit(event, payload);
+    }
+  } catch (err) {
+    console.error('[NOTE_CONTROLLER] emitToUserSockets error', err);
+  }
+}
