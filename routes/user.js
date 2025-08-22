@@ -23,4 +23,17 @@ router.get('/search', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/users/verified - list all verified users except self
+router.get('/verified', authMiddleware, async (req, res) => {
+  try {
+    const users = await User.find({
+      verified: true,
+      _id: { $ne: req.user._id }
+    }).select('_id email name');
+    res.json(users);
+  } catch (err) {
+    res.status(500).json({ message: 'Error fetching users' });
+  }
+});
+
 module.exports = router;

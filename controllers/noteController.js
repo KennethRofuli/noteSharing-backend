@@ -25,7 +25,7 @@ exports.getNotes = async (req, res) => {
     const notes = await Note.find({
       $or: [
         { uploadedBy: req.user.id },
-        { sharedWith: req.user.id }
+        { 'sharedWith.recipient': req.user.id } // <-- updated for subdocs
       ]
     }).populate("uploadedBy", "email name");
     res.json(notes);
@@ -54,9 +54,31 @@ exports.shareNote = async (req, res) => {
     }
 
     // ✅ avoid duplicates
-    if (!note.sharedWith.includes(user._id)) {
-      note.sharedWith.push(user._id);
+    const alreadyShared = (note.sharedWith || []).some(sw =>
+      (sw.recipient && sw.recipient.toString() === user._id.toString()) ||
+      (sw._id && sw._id.toString() === user._id.toString()) // fallback for legacy
+    );
+    if (!alreadyShared) {
+      note.sharedWith.push({ recipient: user._id });
       await note.save();
+    }
+
+    const io = req.app.get('io');
+    const connectedUsers = req.app.get('connectedUsers');
+
+    const recipientId = user._id.toString();
+    const recipientSocketId = connectedUsers.get(recipientId);
+
+    // Debug logs
+    //console.log('[SOCKET][SHARE] recipientId:', recipientId);
+    //console.log('[SOCKET][SHARE] connectedUsers:', connectedUsers);
+    //console.log('[SOCKET][SHARE] recipientSocketId:', recipientSocketId);
+
+    if (io && recipientSocketId) {
+      io.to(recipientSocketId).emit('note-shared', { noteId: note._id });
+      console.log('[SOCKET][SHARE] Emitted note-shared to socket:', recipientSocketId);
+    } else {
+      console.log('[SOCKET][SHARE] No socket emission (io or recipientSocketId missing)');
     }
 
     res.json({ message: "Note shared successfully" });
@@ -139,7 +161,38 @@ exports.deleteNote = async (req, res) => {
       console.warn('File not found for deletion (candidates tried):', filename, 'uploadsDir:', uploadsDir);
     }
 
+    // Save sharedWith user IDs before deleting
+    const sharedUserIds = (note.sharedWith || [])
+      .map(sw => sw.recipient ? sw.recipient.toString() : (sw._id ? sw._id.toString() : sw.toString()))
+      .filter(Boolean);
+
     await note.deleteOne();
+
+    // Emit socket event to all shared users
+    const io = req.app.get('io');
+    const connectedUsers = req.app.get('connectedUsers');
+
+    // Debug logs
+    console.log('[SOCKET][DELETE] sharedUserIds:', sharedUserIds);
+    console.log('[SOCKET][DELETE] connectedUsers:', connectedUsers);
+
+    if (io && connectedUsers && sharedUserIds.length) {
+      sharedUserIds.forEach(userId => {
+        const socketId = connectedUsers.get(userId);
+        console.log('[SOCKET][DELETE] userId:', userId, 'socketId:', socketId);
+        if (socketId) {
+          io.to(socketId).emit('note-deleted', { noteId: note._id });
+          console.log('[SOCKET][DELETE] Emitted note-deleted to socket:', socketId);
+        } else {
+          console.log('[SOCKET][DELETE] No socket emission for userId:', userId);
+        }
+      });
+    } else {
+      console.log('[SOCKET][DELETE] No socket emission (io, connectedUsers, or sharedUserIds missing)');
+    }
+
+    console.log('Emitting note-deleted to:', sharedUserIds);
+
     return res.json({ message: 'Note deleted successfully' });
   } catch (err) {
     console.error('Failed to delete note', req.params.id, err);
