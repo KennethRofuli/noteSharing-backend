@@ -12,13 +12,20 @@ const Message = require('./models/Message');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: '*' } });
 
-// in-memory multi-socket map: userId -> Set<socketId>
-const connectedUsers = new Map(); // userId -> Set(socketId)
+// ✅ Allowed frontend origins (update to your actual Vercel domain)
+const allowedOrigins = [
+  "http://localhost:5173",           // local dev
+  "https://note-sharing-frontend.vercel.app/" // deployed frontend
+];
 
-// Middleware
-app.use(cors());
+// Express CORS middleware
+app.use(cors({
+  origin: allowedOrigins,
+  credentials: true
+}));
+
+// JSON + uploads
 app.use(express.json());
 app.use('/uploads', express.static('uploads')); // serve uploaded files
 
@@ -29,7 +36,18 @@ app.use('/api/users', require('./routes/user'));
 const chatRouter = require('./routes/chat');
 app.use('/api/chat', chatRouter);
 
-// Socket.io
+// Socket.IO with CORS
+const io = new Server(server, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"]
+  }
+});
+
+// in-memory multi-socket map: userId -> Set<socketId>
+const connectedUsers = new Map();
+
+// Socket.io handlers
 io.on('connection', (socket) => {
   console.log('[SOCKET] connected', socket.id);
 
@@ -61,7 +79,12 @@ io.on('connection', (socket) => {
 
     // persist message regardless of recipient online state
     try {
-      const message = new Message({ from: msg.from, to: msg.to, text: msg.text, timestamp: msg.timestamp || Date.now() });
+      const message = new Message({
+        from: msg.from,
+        to: msg.to,
+        text: msg.text,
+        timestamp: msg.timestamp || Date.now()
+      });
       await message.save();
     } catch (err) {
       console.error('[SOCKET][CHAT] failed saving message', err);
@@ -81,7 +104,7 @@ io.on('connection', (socket) => {
 app.set('io', io);
 app.set('connectedUsers', connectedUsers);
 
-// Connect to MongoDB
+// MongoDB connection
 mongoose.connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,

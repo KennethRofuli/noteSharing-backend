@@ -26,7 +26,8 @@ exports.registerUser = async (req, res) => {
     // send verification email using the verificationToken (non-blocking)
     (async () => {
       try {
-        const verifyUrl = `${process.env.CLIENT_URL || 'http://localhost:5173'}/verify/${verificationToken}`;
+        //const verifyUrl = `${process.env.CLIENT_URL || 'http://localhost:5173'}/verify/${verificationToken}`;
+        const verifyUrl = `${process.env.CLIENT_URL || 'https://note-sharing-frontend.vercel.app/'}/verify/${verificationToken}`;
         await transporter.sendMail({
           from: process.env.EMAIL_USER,
           to: user.email,
