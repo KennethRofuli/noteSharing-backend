@@ -15,13 +15,19 @@ const server = http.createServer(app);
 
 // ✅ Allowed frontend origins (update to your actual Vercel domain)
 const allowedOrigins = [
-  "http://localhost:5173",           // local dev
-  "https://note-sharing-frontend.vercel.app" // deployed frontend
+  "http://localhost:5173",
+  "https://note-sharing-frontend.vercel.app" // must match exactly (no trailing slash)
 ];
 
-// Express CORS middleware
+// Express CORS middleware (use function so we can log / be strict)
 app.use(cors({
-  origin: allowedOrigins,
+  origin: (origin, cb) => {
+    // allow non-browser (curl, Postman) requests with no origin
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    console.warn('[CORS] blocked origin:', origin);
+    return cb(new Error('Not allowed by CORS'));
+  },
   credentials: true
 }));
 
@@ -36,11 +42,18 @@ app.use('/api/users', require('./routes/user'));
 const chatRouter = require('./routes/chat');
 app.use('/api/chat', chatRouter);
 
-// Socket.IO with CORS
+// Socket.IO with explicit CORS and credentials
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"]
+    origin: (origin, cb) => {
+      // socket.io passes undefined for same-origin / server-side, allow those
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      console.warn('[Socket.IO CORS] blocked origin:', origin);
+      return cb(new Error('Not allowed by Socket.IO CORS'));
+    },
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
