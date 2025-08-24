@@ -47,6 +47,29 @@ app.use('/api/users', userRoutes);
 const chatRouter = require('./routes/chat');
 app.use('/api/chat', chatRouter);
 
+// TEMP ROUTE: Emit test events to a specific user
+app.get('/test-emit/:userId', (req, res) => {
+  const io = req.app.get('io');
+  const connectedUsers = req.app.get('connectedUsers');
+  const userId = req.params.userId;
+
+  if (!io || !connectedUsers) {
+    return res.status(500).send("Socket.IO not initialized");
+  }
+
+  emitToUserSockets(io, connectedUsers, userId, 'note-shared', {
+    noteId: 'TEST_NOTE_ID',
+    from: 'TEST_SENDER_ID'
+  });
+
+  emitToUserSockets(io, connectedUsers, userId, 'note-deleted', {
+    noteId: 'TEST_NOTE_ID'
+  });
+
+  res.send(`Test events emitted to user ${userId}`);
+});
+
+
 // Socket.IO
 const io = new Server(server, {
   cors: {
