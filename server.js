@@ -4,8 +4,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
-const path = require('path');
-const fs = require('fs');
 
 const authRoutes = require('./routes/auth');
 const noteRoutes = require('./routes/notes');
@@ -14,75 +12,24 @@ const Message = require('./models/Message');
 
 const app = express();
 const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
 
-// Allowed frontend origins (exact, no trailing slash)
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://note-sharing-frontend.vercel.app"
-];
+// in-memory multi-socket map: userId -> Set<socketId>
+const connectedUsers = new Map(); // userId -> Set(socketId)
 
 // Middleware
-app.use(cors({
-  origin: (origin, cb) => {
-    // allow Postman / curl requests (no origin)
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    console.warn('[CORS] blocked origin:', origin);
-    cb(new Error('Not allowed by CORS'));
-  },
-  credentials: true
-}));
-
+app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static('uploads'));
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, 'uploads');
-fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', express.static('uploads')); // serve uploaded files
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/notes', noteRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/users', require('./routes/user'));
 const chatRouter = require('./routes/chat');
 app.use('/api/chat', chatRouter);
 
-// TEMP ROUTE: Emit test events to a specific user
-app.get('/test-emit/:userId', (req, res) => {
-  const io = req.app.get('io');
-  const connectedUsers = req.app.get('connectedUsers');
-  const userId = req.params.userId;
-
-  if (!io || !connectedUsers) {
-    return res.status(500).send("Socket.IO not initialized");
-  }
-
-  emitToUserSockets(io, connectedUsers, userId, 'note-shared', {
-    noteId: 'TEST_NOTE_ID',
-    from: 'TEST_SENDER_ID'
-  });
-
-  emitToUserSockets(io, connectedUsers, userId, 'note-deleted', {
-    noteId: 'TEST_NOTE_ID'
-  });
-
-  res.send(`Test events emitted to user ${userId}`);
-});
-
-
-// Socket.IO
-const io = new Server(server, {
-  cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  transports: ['websocket', 'polling']
-});
-
-// in-memory socket map
-const connectedUsers = new Map();
-
+// Socket.io
 io.on('connection', (socket) => {
   console.log('[SOCKET] connected', socket.id);
 
@@ -91,7 +38,7 @@ io.on('connection', (socket) => {
     const set = connectedUsers.get(uid) || new Set();
     set.add(socket.id);
     connectedUsers.set(uid, set);
-    console.log('[SOCKET] register', uid, socket.id);
+    console.log('[SOCKET] register', uid, '->', socket.id, 'mapSize=', connectedUsers.size);
   });
 
   socket.on('disconnect', () => {
@@ -103,20 +50,18 @@ io.on('connection', (socket) => {
         console.log('[SOCKET] removed mapping', uid);
       }
     }
-    console.log('[SOCKET] disconnected', socket.id);
+    console.log('[SOCKET] disconnect', socket.id, 'mapSize=', connectedUsers.size);
   });
 
   socket.on('chat-message', async (msg) => {
     const toId = String(msg.to);
     const sockets = connectedUsers.get(toId);
+    console.log('[SOCKET][CHAT] Received chat-message:', msg);
+    console.log('[SOCKET][CHAT] recipientSockets:', sockets);
 
+    // persist message regardless of recipient online state
     try {
-      const message = new Message({
-        from: msg.from,
-        to: msg.to,
-        text: msg.text,
-        timestamp: msg.timestamp || Date.now()
-      });
+      const message = new Message({ from: msg.from, to: msg.to, text: msg.text, timestamp: msg.timestamp || Date.now() });
       await message.save();
     } catch (err) {
       console.error('[SOCKET][CHAT] failed saving message', err);
@@ -126,22 +71,24 @@ io.on('connection', (socket) => {
       for (const sid of sockets) {
         io.to(sid).emit('chat-message', msg);
       }
+    } else {
+      console.log('[SOCKET][CHAT] recipient not connected - message saved for later');
     }
   });
 });
 
-// Expose io in controllers
+// Make io accessible in controllers
 app.set('io', io);
 app.set('connectedUsers', connectedUsers);
 
-// MongoDB
+// Connect to MongoDB
 mongoose.connect(process.env.MONGO_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-}).then(() => console.log('MongoDB connected'))
-  .catch(err => console.error(err));
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(() => console.log('MongoDB connected'))
+.catch(err => console.error(err));
 
-// Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
