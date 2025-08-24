@@ -16,7 +16,7 @@ const server = http.createServer(app);
 // ✅ Allowed frontend origins (update to your actual Vercel domain)
 const allowedOrigins = [
   "http://localhost:5173",           // local dev
-  "https://note-sharing-frontend.vercel.app/" // deployed frontend
+  "https://note-sharing-frontend.vercel.app" // deployed frontend
 ];
 
 // Express CORS middleware
