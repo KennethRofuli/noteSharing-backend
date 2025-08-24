@@ -56,16 +56,11 @@ app.use('/api/chat', chatRouter);
 // Socket.IO with explicit CORS and credentials
 const io = new Server(server, {
   cors: {
-    origin: (origin, cb) => {
-      // socket.io passes undefined for same-origin / server-side, allow those
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      console.warn('[Socket.IO CORS] blocked origin:', origin);
-      return cb(new Error('Not allowed by Socket.IO CORS'));
-    },
+    origin: allowedOrigins,        // allow the array of allowed origins
     methods: ["GET", "POST"],
     credentials: true
-  }
+  },
+  transports: ['websocket', 'polling'] // ensure both transports are allowed
 });
 
 // in-memory multi-socket map: userId -> Set<socketId>
