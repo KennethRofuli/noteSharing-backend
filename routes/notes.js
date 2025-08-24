@@ -16,10 +16,19 @@ const allowedExtensions = [
 // ✅ Max upload size (bytes) - override with env UPLOAD_MAX_BYTES, default 20 MB
 const MAX_FILE_SIZE = Number(process.env.UPLOAD_MAX_BYTES) || 20 * 1024 * 1024;
 
-// ✅ Multer storage config
+// ensure uploads directory exists and use absolute path
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('Uploads dir ready:', uploadsDir);
+} catch (err) {
+  console.error('Failed to create uploads dir', uploadsDir, err);
+}
+
+// ✅ Multer storage config (use absolute uploadsDir)
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/');
+    cb(null, uploadsDir);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
@@ -57,11 +66,10 @@ router.post('/upload', authMiddleware, (req, res, next) => {
 }, uploadNote);
 router.get('/', authMiddleware, getNotes);
 
-// ✅ Download a note file
 // ✅ Download a note file with access control
 router.get('/download/:filename', authMiddleware, async (req, res) => {
   const filename = req.params.filename;
-  const filePath = path.join(__dirname, '../uploads', filename);
+  const filePath = path.join(uploadsDir, filename);
 
   try {
     // Find the note by matching file URL
@@ -69,20 +77,25 @@ router.get('/download/:filename', authMiddleware, async (req, res) => {
 
     if (!note) return res.status(404).json({ message: 'Note not found' });
 
-    // Check if user is owner or in sharedWith
+    // Check if user is owner or in sharedWith (sharedWith contains objects with recipient field)
     const userId = req.user.id;
-    const hasAccess =
-      note.uploadedBy.toString() === userId ||
-      note.sharedWith.some(u => u.toString() === userId);
+    const isOwner = note.uploadedBy && note.uploadedBy.toString() === userId;
+    const isShared = (note.sharedWith || []).some(sw =>
+      (sw && (sw.recipient || sw.recipient === 0) && String(sw.recipient) === String(userId))
+    );
 
-    if (!hasAccess) {
+    if (!isOwner && !isShared) {
       return res.status(403).json({ message: 'Unauthorized to download this note' });
     }
 
     res.download(filePath, filename, err => {
-      if (err) res.status(500).json({ message: 'File download failed', error: err });
+      if (err) {
+        console.error('File download failed', err);
+        return res.status(500).json({ message: 'File download failed', error: err.message || err });
+      }
     });
   } catch (err) {
+    console.error('Download error', err);
     res.status(500).json({ message: err.message });
   }
 });

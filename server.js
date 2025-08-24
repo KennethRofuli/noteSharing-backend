@@ -4,6 +4,8 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
+const fs = require('fs');
 
 const authRoutes = require('./routes/auth');
 const noteRoutes = require('./routes/notes');
@@ -34,6 +36,15 @@ app.use(cors({
 // JSON + uploads
 app.use(express.json());
 app.use('/uploads', express.static('uploads')); // serve uploaded files
+
+// ensure uploads directory exists
+const uploadsDir = path.join(__dirname, 'uploads');
+try {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('Uploads dir ready:', uploadsDir);
+} catch (err) {
+  console.error('Failed to create uploads dir', uploadsDir, err);
+}
 
 // Routes
 app.use('/api/auth', authRoutes);
