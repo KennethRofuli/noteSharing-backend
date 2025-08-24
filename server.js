@@ -15,58 +15,51 @@ const Message = require('./models/Message');
 const app = express();
 const server = http.createServer(app);
 
-// ✅ Allowed frontend origins (update to your actual Vercel domain)
+// Allowed frontend origins (exact, no trailing slash)
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://note-sharing-frontend.vercel.app" // must match exactly (no trailing slash)
+  "https://note-sharing-frontend.vercel.app"
 ];
 
-// Express CORS middleware (use function so we can log / be strict)
+// Middleware
 app.use(cors({
   origin: (origin, cb) => {
-    // allow non-browser (curl, Postman) requests with no origin
+    // allow Postman / curl requests (no origin)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     console.warn('[CORS] blocked origin:', origin);
-    return cb(new Error('Not allowed by CORS'));
+    cb(new Error('Not allowed by CORS'));
   },
   credentials: true
 }));
 
-// JSON + uploads
 app.use(express.json());
-app.use('/uploads', express.static('uploads')); // serve uploaded files
+app.use('/uploads', express.static('uploads'));
 
-// ensure uploads directory exists
+// Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
-try {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-  console.log('Uploads dir ready:', uploadsDir);
-} catch (err) {
-  console.error('Failed to create uploads dir', uploadsDir, err);
-}
+fs.mkdirSync(uploadsDir, { recursive: true });
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/notes', noteRoutes);
-app.use('/api/users', require('./routes/user'));
+app.use('/api/users', userRoutes);
 const chatRouter = require('./routes/chat');
 app.use('/api/chat', chatRouter);
 
-// Socket.IO with explicit CORS and credentials
+// Socket.IO
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,        // allow the array of allowed origins
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
     credentials: true
   },
-  transports: ['websocket', 'polling'] // ensure both transports are allowed
+  transports: ['websocket', 'polling']
 });
 
-// in-memory multi-socket map: userId -> Set<socketId>
+// in-memory socket map
 const connectedUsers = new Map();
 
-// Socket.io handlers
 io.on('connection', (socket) => {
   console.log('[SOCKET] connected', socket.id);
 
@@ -75,7 +68,7 @@ io.on('connection', (socket) => {
     const set = connectedUsers.get(uid) || new Set();
     set.add(socket.id);
     connectedUsers.set(uid, set);
-    console.log('[SOCKET] register', uid, '->', socket.id, 'mapSize=', connectedUsers.size);
+    console.log('[SOCKET] register', uid, socket.id);
   });
 
   socket.on('disconnect', () => {
@@ -87,16 +80,13 @@ io.on('connection', (socket) => {
         console.log('[SOCKET] removed mapping', uid);
       }
     }
-    console.log('[SOCKET] disconnect', socket.id, 'mapSize=', connectedUsers.size);
+    console.log('[SOCKET] disconnected', socket.id);
   });
 
   socket.on('chat-message', async (msg) => {
     const toId = String(msg.to);
     const sockets = connectedUsers.get(toId);
-    console.log('[SOCKET][CHAT] Received chat-message:', msg);
-    console.log('[SOCKET][CHAT] recipientSockets:', sockets);
 
-    // persist message regardless of recipient online state
     try {
       const message = new Message({
         from: msg.from,
@@ -113,24 +103,22 @@ io.on('connection', (socket) => {
       for (const sid of sockets) {
         io.to(sid).emit('chat-message', msg);
       }
-    } else {
-      console.log('[SOCKET][CHAT] recipient not connected - message saved for later');
     }
   });
 });
 
-// Make io accessible in controllers
+// Expose io in controllers
 app.set('io', io);
 app.set('connectedUsers', connectedUsers);
 
-// MongoDB connection
+// MongoDB
 mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-})
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.error(err));
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+}).then(() => console.log('MongoDB connected'))
+  .catch(err => console.error(err));
 
+// Start server
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
