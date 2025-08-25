@@ -4,6 +4,7 @@ const fsp = fs.promises;
 const Note = require('../models/Note');
 const User = require('../models/User');
 
+// Upload a new note
 exports.uploadNote = async (req, res) => {
   const { title, description, courseCode, instructor } = req.body;
   const uploadedBy = req.user._id;
@@ -20,6 +21,7 @@ exports.uploadNote = async (req, res) => {
   }
 };
 
+// Get all notes for the user
 exports.getNotes = async (req, res) => {
   try {
     const notes = await Note.find({
@@ -35,7 +37,7 @@ exports.getNotes = async (req, res) => {
   }
 };
 
-// POST /notes/share/:id
+// Share a note with another user
 exports.shareNote = async (req, res) => {
   try {
     const { id } = req.params;
@@ -59,10 +61,14 @@ exports.shareNote = async (req, res) => {
       note.sharedWith.push({ recipient: user._id });
       await note.save();
 
-      // emit socket
+      // emit socket with logging
       try {
         const io = req.app.get('io');
         const connectedUsers = req.app.get('connectedUsers');
+
+        const sockets = connectedUsers.get(String(user._id));
+        console.log('[SOCKET][SHARE] emitting note-shared to user:', user._id, 'sockets:', sockets);
+
         emitToUserSockets(io, connectedUsers, user._id, 'note-shared', { noteId: note._id, from: req.user._id });
       } catch (err) {
         console.error('[NOTE_CONTROLLER] share emit error', err);
@@ -76,7 +82,7 @@ exports.shareNote = async (req, res) => {
   }
 };
 
-// DELETE /notes/delete/:id
+// Delete a note
 exports.deleteNote = async (req, res) => {
   try {
     const note = await Note.findById(req.params.id);
@@ -85,7 +91,7 @@ exports.deleteNote = async (req, res) => {
     const ownerId = note.uploadedBy?.toString();
     if (ownerId !== req.user.id) return res.status(403).json({ message: 'Not allowed to delete this note' });
 
-    // resolve filename
+    // Resolve filename
     let filename = null;
     if (note.fileUrl) {
       try {
@@ -101,7 +107,6 @@ exports.deleteNote = async (req, res) => {
 
     if (filename) {
       const candidates = [filename];
-
       try {
         const decoded = decodeURIComponent(filename);
         if (decoded !== filename) candidates.push(decoded);
@@ -145,10 +150,11 @@ exports.deleteNote = async (req, res) => {
     const io = req.app.get('io');
     const connectedUsers = req.app.get('connectedUsers');
 
-    console.log('[SOCKET][DELETE] sharedUserIds:', sharedUserIds);
-
     if (io && connectedUsers && sharedUserIds.length) {
       sharedUserIds.forEach(uid => {
+        const sockets = connectedUsers.get(String(uid));
+        console.log('[SOCKET][DELETE] emitting note-deleted to user:', uid, 'sockets:', sockets);
+
         emitToUserSockets(io, connectedUsers, uid, 'note-deleted', { noteId: note._id });
       });
     }
@@ -160,7 +166,7 @@ exports.deleteNote = async (req, res) => {
   }
 };
 
-// helper
+// Helper to emit events to a user's connected sockets
 function emitToUserSockets(io, connectedUsers, userId, event, payload) {
   try {
     const sockets = connectedUsers.get(String(userId));
