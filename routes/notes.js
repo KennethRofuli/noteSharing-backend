@@ -126,4 +126,30 @@ router.delete('/delete/:id', authMiddleware, deleteNote);
 // ✅ Share note
 router.post('/share/:id', authMiddleware, shareNote);
 
+// POST /api/notes/unshare/:id - Remove a note from current user's shared list
+router.post('/unshare/:id', authMiddleware, async (req, res) => {
+  try {
+    const noteId = req.params.id;
+    const userId = req.user._id;
+
+    const note = await Note.findById(noteId);
+    if (!note) {
+      return res.status(404).json({ message: 'Note not found' });
+    }
+
+    // Filter out the current user from sharedWith array
+    note.sharedWith = note.sharedWith.filter(share => {
+      const recipientId = share.recipient ? share.recipient.toString() : share.toString();
+      return recipientId !== userId.toString();
+    });
+
+    await note.save();
+    
+    res.json({ message: 'Note removed from your shared list' });
+  } catch (err) {
+    console.error('Error unsharing note:', err);
+    res.status(500).json({ message: 'Server error while unsharing note' });
+  }
+});
+
 module.exports = router;
