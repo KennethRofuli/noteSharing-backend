@@ -151,24 +151,16 @@ io.on('connection', (socket) => {
       await message.save();
       console.log('[SOCKET][CHAT] Message saved to database');
       
-      // Send to recipient using room-based messaging (more reliable)
+      // Send to recipient only (not back to sender)
       io.to(toId).emit('chat-message', {
         ...msg,
         _id: message._id,
         timestamp: message.timestamp
       });
       
-      // Also send to sender if they have multiple sessions
-      if (fromId !== toId) {
-        io.to(fromId).emit('chat-message', {
-          ...msg,
-          _id: message._id,
-          timestamp: message.timestamp,
-          self: true
-        });
-      }
+      // Don't send back to sender - frontend handles it optimistically
       
-      console.log(`[SOCKET][CHAT] Message sent to rooms: ${toId}, ${fromId}`);
+      console.log(`[SOCKET][CHAT] Message sent to recipient: ${toId}`);
       
       // Send acknowledgment back to sender
       if (callback) {
