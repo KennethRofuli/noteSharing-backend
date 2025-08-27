@@ -12,6 +12,7 @@ const authRoutes = require('./routes/auth');
 const noteRoutes = require('./routes/notes');
 const userRoutes = require('./routes/user');
 const chatRouter = require('./routes/chat');
+const notificationRoutes = require('./routes/notifications');
 
 // Models
 const Message = require('./models/Message');
@@ -90,31 +91,22 @@ app.use('/api/auth', authRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/chat', chatRouter);
+app.use('/api/notifications', notificationRoutes);
 
 // -------------------
 // Socket.IO Events
 // -------------------
 io.on('connection', (socket) => {
-  console.log('[SOCKET] connected', socket.id);
-
+  console.log('User connected to socket:', socket.id);
+  
   socket.on('register', (userId) => {
-    const uid = String(userId);
-    const set = connectedUsers.get(uid) || new Set();
-    set.add(socket.id);
-    connectedUsers.set(uid, set);
-    console.log('[SOCKET] register', uid, '->', socket.id, 'mapSize=', connectedUsers.size);
+    console.log(`User ${userId} registered with socket ${socket.id}`);
+    socket.join(userId);
+    console.log('Socket rooms:', Array.from(socket.rooms));
   });
-
+  
   socket.on('disconnect', () => {
-    for (const [uid, set] of connectedUsers.entries()) {
-      if (set.has(socket.id)) {
-        set.delete(socket.id);
-        if (set.size === 0) connectedUsers.delete(uid);
-        else connectedUsers.set(uid, set);
-        console.log('[SOCKET] removed mapping', uid);
-      }
-    }
-    console.log('[SOCKET] disconnect', socket.id, 'mapSize=', connectedUsers.size);
+    console.log('User disconnected from socket:', socket.id);
   });
 
   socket.on('chat-message', async (msg) => {
