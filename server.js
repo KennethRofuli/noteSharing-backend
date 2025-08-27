@@ -52,7 +52,7 @@ const io = new Server(server, {
 const uploadsDir = path.join(__dirname, 'uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
 
-// In-memory map for connected sockets
+// In-memory map for connected sockets - Map of userId -> Set of socketIds
 const connectedUsers = new Map();
 
 // -------------------
@@ -100,36 +100,89 @@ io.on('connection', (socket) => {
   console.log('User connected to socket:', socket.id);
   
   socket.on('register', (userId) => {
-    console.log(`User ${userId} registered with socket ${socket.id}`);
-    socket.join(userId);
+    const userIdStr = String(userId);
+    console.log(`User ${userIdStr} registered with socket ${socket.id}`);
+    
+    // Join user-specific room
+    socket.join(userIdStr);
+    
+    // Track user in connectedUsers map
+    if (!connectedUsers.has(userIdStr)) {
+      connectedUsers.set(userIdStr, new Set());
+    }
+    connectedUsers.get(userIdStr).add(socket.id);
+    
+    // Store userId on socket for cleanup
+    socket.userId = userIdStr;
+    
     console.log('Socket rooms:', Array.from(socket.rooms));
+    console.log(`Connected users count for ${userIdStr}:`, connectedUsers.get(userIdStr).size);
   });
   
   socket.on('disconnect', () => {
     console.log('User disconnected from socket:', socket.id);
+    
+    // Clean up connectedUsers map
+    if (socket.userId) {
+      const userSockets = connectedUsers.get(socket.userId);
+      if (userSockets) {
+        userSockets.delete(socket.id);
+        if (userSockets.size === 0) {
+          connectedUsers.delete(socket.userId);
+        }
+      }
+    }
   });
 
-  socket.on('chat-message', async (msg) => {
+  socket.on('chat-message', async (msg, callback) => {
     console.log('[SOCKET][CHAT] Received chat-message:', msg);
-    const toId = String(msg.to);
-    const sockets = connectedUsers.get(toId);
-    console.log('[SOCKET][CHAT] recipientSockets:', sockets);
-
-    // persist message
+    
     try {
+      const toId = String(msg.to);
+      const fromId = String(msg.from);
+      
+      // Persist message to database
       const message = new Message({
-        from: msg.from,
-        to: msg.to,
+        from: fromId,
+        to: toId,
         text: msg.text,
-        timestamp: msg.timestamp || Date.now(),
+        timestamp: msg.timestamp || new Date(),
       });
       await message.save();
+      console.log('[SOCKET][CHAT] Message saved to database');
+      
+      // Send to recipient using room-based messaging (more reliable)
+      io.to(toId).emit('chat-message', {
+        ...msg,
+        _id: message._id,
+        timestamp: message.timestamp
+      });
+      
+      // Also send to sender if they have multiple sessions
+      if (fromId !== toId) {
+        io.to(fromId).emit('chat-message', {
+          ...msg,
+          _id: message._id,
+          timestamp: message.timestamp,
+          self: true
+        });
+      }
+      
+      console.log(`[SOCKET][CHAT] Message sent to rooms: ${toId}, ${fromId}`);
+      
+      // Send acknowledgment back to sender
+      if (callback) {
+        callback({ success: true, messageId: message._id });
+      }
+      
     } catch (err) {
-      console.error('[SOCKET][CHAT] failed saving message', err);
-    }
-
-    if (sockets && sockets.size) {
-      for (const sid of sockets) io.to(sid).emit('chat-message', msg);
+      console.error('[SOCKET][CHAT] Error handling chat message:', err);
+      
+      if (callback) {
+        callback({ error: err.message });
+      }
+      
+      socket.emit('chat-error', { message: 'Failed to send message' });
     }
   });
 });
