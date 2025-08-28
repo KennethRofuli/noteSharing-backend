@@ -76,11 +76,10 @@ exports.shareNote = async (req, res) => {
       return res.status(403).json({ message: "Not allowed to share this note" });
     }
 
-    // Check if already shared
-    if (!note.sharedWith) {
-      note.sharedWith = [];
-    }
+    // Initialize sharedWith if undefined
+    if (!note.sharedWith) note.sharedWith = [];
 
+    // Prevent duplicate shares
     const alreadyShared = note.sharedWith.some(share => {
       const recipientId = share.recipient ? share.recipient.toString() : share.toString();
       return recipientId === user._id.toString();
@@ -90,7 +89,7 @@ exports.shareNote = async (req, res) => {
       note.sharedWith.push({ recipient: user._id });
       await note.save();
 
-      // Emit socket notification
+      // Notify recipient via socket
       notifyUser(req.app, user._id, 'note-shared', { 
         noteId: note._id, 
         from: userId 
@@ -137,8 +136,9 @@ exports.deleteNote = async (req, res) => {
     // Delete the note document
     await note.deleteOne();
 
-    // Notify shared users
-    sharedUserIds.forEach(recipientId => {
+    // Notify shared users (once per user)
+    const recipients = new Set(sharedUserIds);
+    recipients.forEach(recipientId => {
       notifyUser(req.app, recipientId, 'note-deleted', { noteId: note._id });
     });
 
@@ -154,7 +154,6 @@ async function deleteNoteFile(fileUrl) {
   if (!fileUrl) return;
 
   try {
-    // Extract filename from URL or path
     let filename;
     try {
       const parsed = new URL(fileUrl);
@@ -168,14 +167,12 @@ async function deleteNoteFile(fileUrl) {
     const uploadsDir = path.join(__dirname, '..', 'uploads');
     let fileToDelete = null;
 
-    // Try direct path and URL-decoded path
     const candidates = [filename];
     try {
       const decoded = decodeURIComponent(filename);
       if (decoded !== filename) candidates.push(decoded);
     } catch {}
 
-    // Check if any candidate exists
     for (const candidate of candidates) {
       const filePath = path.join(uploadsDir, candidate);
       try {
@@ -185,7 +182,6 @@ async function deleteNoteFile(fileUrl) {
       } catch {}
     }
 
-    // Try finding by prefix if direct match failed
     if (!fileToDelete) {
       try {
         const prefix = filename.split('-')[0];
@@ -197,7 +193,6 @@ async function deleteNoteFile(fileUrl) {
       }
     }
 
-    // Delete the file if found
     if (fileToDelete) {
       await fsp.unlink(fileToDelete);
       console.log('Deleted file:', fileToDelete);
@@ -209,31 +204,33 @@ async function deleteNoteFile(fileUrl) {
   }
 }
 
-// Helper to notify users via sockets
+// Helper to notify users via sockets (fixed: no duplicates)
 function notifyUser(app, userId, event, payload) {
   try {
     const io = app.get('io');
     if (!io) return;
 
     const connectedUsers = app.get('connectedUsers');
-    
-    // Method 1: Use room-based notifications (more reliable)
-    io.to(userId.toString()).emit(event, payload);
-    
-    // Method 2: Directly notify specific socket IDs (if using connectedUsers map)
+
     if (connectedUsers) {
       const sockets = connectedUsers.get(String(userId));
-      
       if (sockets instanceof Set) {
         for (const sid of sockets) {
           io.to(sid).emit(event, payload);
         }
+        console.log(`[SOCKET] Emitted ${event} to user (sockets):`, userId);
+        return; // prevent double emit
       } else if (typeof sockets === 'string') {
         io.to(sockets).emit(event, payload);
+        console.log(`[SOCKET] Emitted ${event} to user (single socket):`, userId);
+        return;
       }
-      
-      console.log(`[SOCKET] Emitted ${event} to user:`, userId);
     }
+
+    // fallback: emit to room named after userId only if no connectedSockets found
+    io.to(userId.toString()).emit(event, payload);
+    console.log(`[SOCKET] Emitted ${event} to user (room fallback):`, userId);
+
   } catch (err) {
     console.error(`[SOCKET] Error emitting ${event}:`, err);
   }
