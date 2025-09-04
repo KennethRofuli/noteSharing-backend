@@ -96,6 +96,47 @@ router.get('/conversations', auth, async (req, res) => {
   }
 });
 
+// GET /api/chat/unread-count - Get total unread message count for current user
+router.get('/unread-count', auth, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    // Count unread messages for this user
+    const unreadCount = await Message.countDocuments({
+      to: userId,
+      read: false
+    });
+    
+    res.json({ count: unreadCount });
+  } catch (error) {
+    console.error('Error fetching unread count:', error);
+    res.status(500).json({ error: 'Failed to get unread count' });
+  }
+});
+
+// PUT /api/chat/messages/:userId/read - Mark all messages from a specific user as read
+router.put('/messages/:userId/read', auth, async (req, res) => {
+  try {
+    const currentUserId = req.user._id;
+    const otherUserId = req.params.userId;
+    
+    // Mark all messages from otherUserId to currentUserId as read
+    const result = await Message.updateMany(
+      { 
+        from: otherUserId, 
+        to: currentUserId, 
+        read: false 
+      },
+      { read: true }
+    );
+    
+    console.log(`Marked ${result.modifiedCount} messages as read`);
+    res.json({ success: true, modifiedCount: result.modifiedCount });
+  } catch (error) {
+    console.error('Error marking messages as read:', error);
+    res.status(500).json({ error: 'Failed to mark messages as read' });
+  }
+});
 
 // GET /api/chat/debug - Check what messages exist
 router.get('/debug', auth, async (req, res) => {
@@ -125,7 +166,8 @@ router.get('/debug', auth, async (req, res) => {
         from: m.from.toString(),
         to: m.to.toString(),
         text: m.text,
-        timestamp: m.timestamp
+        timestamp: m.timestamp,
+        read: m.read // Add read status to debug
       }))
     });
   } catch (err) {

@@ -141,21 +141,23 @@ io.on('connection', (socket) => {
       const toId = String(msg.to);
       const fromId = String(msg.from);
       
-      // Persist message to database
+      // Persist message to database with read: false by default
       const message = new Message({
         from: fromId,
         to: toId,
         text: msg.text,
         timestamp: msg.timestamp || new Date(),
+        read: false // Add this field to mark new messages as unread
       });
       await message.save();
-      console.log('[SOCKET][CHAT] Message saved to database');
+      console.log('[SOCKET][CHAT] Message saved to database with read: false');
       
       // Send to recipient only (not back to sender)
       io.to(toId).emit('chat-message', {
         ...msg,
         _id: message._id,
-        timestamp: message.timestamp
+        timestamp: message.timestamp,
+        read: false
       });
       
       // Don't send back to sender - frontend handles it optimistically
