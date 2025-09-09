@@ -23,7 +23,7 @@ const auth = require('../middleware/auth');
 
 // File upload configuration
 const allowedExtensions = [
-  ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip"
+  ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".zip",".ipynb"
 ];
 const MAX_FILE_SIZE = Number(process.env.UPLOAD_MAX_BYTES) || 20 * 1024 * 1024;
 const uploadsDir = path.join(__dirname, '..', 'uploads');
